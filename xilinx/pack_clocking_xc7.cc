@@ -77,6 +77,8 @@ void XC7Packer::prepare_clocking()
         } else if (ci->type == id_BUFH || ci->type == id_BUFHCE) {
             ci->type = id_BUFHCE_BUFHCE;
             tie_port(ci, "CE", true, true);
+        } else if (ci->type == ctx->id("BUFIO")) {
+            ci->type = ctx->id("BUFIO_BUFIO");
         }
     }
 }
@@ -142,6 +144,8 @@ void XC7Packer::pack_gbs()
         if (ci->type == id_BUFG_BUFG)
             try_preplace(ci, id_I);
         if (ci->type == id_BUFHCE_BUFHCE)
+            try_preplace(ci, id_I);
+        if (ci->type == ctx->id("BUFIO_BUFIO"))
             try_preplace(ci, id_I);
     }
 }
