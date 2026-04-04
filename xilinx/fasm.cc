@@ -1012,10 +1012,17 @@ struct FasmBackend
 
             // clock edge
             std::string edge = str_or_default(ci->params, ctx->id("DDR_CLK_EDGE"), "OPPOSITE_EDGE");
-            if (edge == "SAME_EDGE")          write_bit("IFF.DDR_CLK_EDGE.SAME_EDGE");
-            else if (edge == "OPPOSITE_EDGE") write_bit("IFF.DDR_CLK_EDGE.OPPOSITE_EDGE");
-            else log_error("unsupported clock edge parameter for cell '%s' at %s: %s. Supported are: SAME_EDGE and OPPOSITE_EDGE",
-                            ci->name.c_str(ctx), site.c_str(), edge.c_str());
+            if (edge == "SAME_EDGE" || edge == "SAME_EDGE_PIPELINED") {
+                if (edge == "SAME_EDGE_PIPELINED")
+                    log_info("Cell '%s' uses SAME_EDGE_PIPELINED; mapping to SAME_EDGE bits (verify timing latency).\n",
+                             ci->name.c_str(ctx));
+                write_bit("IFF.DDR_CLK_EDGE.SAME_EDGE");
+            } else if (edge == "OPPOSITE_EDGE") {
+                write_bit("IFF.DDR_CLK_EDGE.OPPOSITE_EDGE");
+            } else {
+                log_error("unsupported clock edge parameter for cell '%s' at %s: %s. Supported are: SAME_EDGE, SAME_EDGE_PIPELINED, and OPPOSITE_EDGE",
+                          ci->name.c_str(ctx), site.c_str(), edge.c_str());
+            }
 
             std::string srtype = str_or_default(ci->params, ctx->id("SRTYPE"), "SYNC");
             if (srtype == "SYNC") write_bit("IFF.SRTYPE.SYNC"); else write_bit("IFF.SRTYPE.ASYNC");

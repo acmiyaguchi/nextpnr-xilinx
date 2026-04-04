@@ -348,7 +348,13 @@ void Arch::setup_pip_blacklist()
             for (int j = 0; j < td.num_pips; j++) {
                 auto &pd = td.pip_data[j];
                 std::string dest_name = IdString(td.wire_data[pd.dst_index].name).str(this);
+                std::string src_name = IdString(td.wire_data[pd.src_index].name).str(this);
                 if (boost::contains(dest_name, "FREQ_REF"))
+                    blacklist_pips[td.type].insert(j);
+                // Block uncharacterized PHASER clock paths (no FASM bits in prjxray-db)
+                if (boost::contains(dest_name, "PERFCLK") || boost::contains(src_name, "PERFCLK"))
+                    blacklist_pips[td.type].insert(j);
+                if (boost::contains(dest_name, "MMCM_MUXED") || boost::contains(src_name, "MMCM_MUXED"))
                     blacklist_pips[td.type].insert(j);
             }
         } else if (boost::starts_with(type, "CLK_HROW_TOP")) {
@@ -370,6 +376,9 @@ void Arch::setup_pip_blacklist()
                 if (boost::contains(dest_name, "RCLK_BEFORE_DIV") &&
                     boost::contains(src_name, "IMUX"))
                     blacklist_pips[td.type].insert(j);
+                // Block uncharacterized inter-IOI clock paths (no FASM bits in prjxray-db)
+                if (boost::contains(dest_name, "I2IOCLK") || boost::contains(src_name, "I2IOCLK"))
+                    blacklist_pips[td.type].insert(j);
             }
         } else if (boost::contains(type, "IOI")) {
             for (int j = 0; j < td.num_pips; j++) {
@@ -388,7 +397,8 @@ void Arch::setup_pip_blacklist()
                 if (boost::contains(type, "_SING") && dest_name == "IOI_ILOGIC0_CLK" && src_name == "IOI_LEAF_GCLK0")
                     blacklist_pips[td.type].insert(j);
             }
-        } else if (boost::starts_with(type, "CMT_TOP_R")) {
+        } else if (boost::starts_with(type, "CMT_TOP")) {
+            // Handles CMT_TOP_L_*, CMT_TOP_R_* (LOWER_B, UPPER_T variants)
             for (int j = 0; j < td.num_pips; j++) {
                 auto &pd = td.pip_data[j];
                 std::string dest_name = IdString(td.wire_data[pd.dst_index].name).str(this);
@@ -397,6 +407,9 @@ void Arch::setup_pip_blacklist()
                 if (boost::contains(dest_name, "PLLOUT_CLK_FREQ_BB_REBUFOUT"))
                     blacklist_pips[td.type].insert(j);
                 if (boost::contains(dest_name, "MMCM_CLK_FREQ_BB"))
+                    blacklist_pips[td.type].insert(j);
+                // Block uncharacterized performance clock paths (no FASM bits in prjxray-db)
+                if (boost::contains(dest_name, "CLK_PERF") || boost::contains(src_name, "CLK_PERF"))
                     blacklist_pips[td.type].insert(j);
             }
         }
@@ -781,6 +794,40 @@ void Arch::routeClock()
             continue;
 
         log_info("    routing clock '%s'\n", clk_net->name.c_str(this));
+
+        // Helper lambda to check if a sink wire is on the dedicated clock network
+        auto is_clock_sink_wire = [this](WireId sink_wire) -> bool {
+            if (sink_wire == WireId()) return false;
+            std::string sink_wire_name = std::string(nameOfWire(sink_wire));
+            return (sink_wire_name.find("CLK") != std::string::npos) ||
+                   (sink_wire_name.find("CLKIN") != std::string::npos) ||
+                   (sink_wire_name.find("/C") != std::string::npos &&
+                    sink_wire_name.find("IDELAY") != std::string::npos) ||
+                   (sink_wire_name.find("/I0") != std::string::npos &&
+                    sink_wire_name.find("BUFG") != std::string::npos) ||
+                   (sink_wire_name.find("/I1") != std::string::npos &&
+                    sink_wire_name.find("BUFG") != std::string::npos);
+        };
+
+        // Check if any user has a non-clock sink - if so, skip dedicated clock routing
+        // entirely and let the general router handle the whole net.
+        bool has_non_clock_sink = false;
+        for (auto &usr : clk_net->users) {
+            auto sink_wire = getCtx()->getNetinfoSinkWire(clk_net, usr);
+            if (!is_clock_sink_wire(sink_wire)) {
+                has_non_clock_sink = true;
+                if (getCtx()->debug)
+                    log_info("        has non-clock sink %s.%s - skipping dedicated routing\n",
+                             usr.cell->name.c_str(this), usr.port.c_str(this));
+                break;
+            }
+        }
+
+        if (has_non_clock_sink) {
+            // Don't bind the source wire - let the general router handle the entire net
+            continue;
+        }
+
         bindWire(getCtx()->getNetinfoSourceWire(clk_net), clk_net, STRENGTH_LOCKED);
 
         for (auto &usr : clk_net->users) {
@@ -789,11 +836,10 @@ void Arch::routeClock()
             WireId dest = WireId();
 
             auto sink_wire = getCtx()->getNetinfoSinkWire(clk_net, usr);
+            std::string sink_wire_name_str = sink_wire != WireId() ? std::string(nameOfWire(sink_wire)) : "";
+
             if (getCtx()->debug) {
-                auto sink_wire_name = "(uninitialized)";
-                if (sink_wire != WireId())
-                    sink_wire_name = nameOfWire(sink_wire);
-                log_info("        routing arc to %s.%s (wire %s):\n", usr.cell->name.c_str(this), usr.port.c_str(this), sink_wire_name);
+                log_info("        routing arc to %s.%s (wire %s):\n", usr.cell->name.c_str(this), usr.port.c_str(this), sink_wire_name_str.c_str());
             }
 
             visit.push(sink_wire);
