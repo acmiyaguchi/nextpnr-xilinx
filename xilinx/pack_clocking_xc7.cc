@@ -77,6 +77,8 @@ void XC7Packer::prepare_clocking()
         } else if (ci->type == id_BUFH || ci->type == id_BUFHCE) {
             ci->type = id_BUFHCE_BUFHCE;
             tie_port(ci, "CE", true, true);
+        } else if (ci->type == ctx->id("BUFIO")) {
+            ci->type = ctx->id("BUFIO_BUFIO");
         }
     }
 }
@@ -112,10 +114,20 @@ void XC7Packer::pack_plls()
             }
             set_default(ci, ctx->id("COMPENSATION"), Property("INTERNAL"));
 
+            // CLKIN2 is typically tied to 1'b0 in RTL when CLKINSEL selects CLKIN1.
+            // Leaving it connected to $PACKER_GND_NET causes the router to emit an
+            // arc into MMCM_CLKIN2 whose prjxray segbits collide with the CLKFBIN
+            // tie-off path in the same CMT_TOP tile. The silicon does not require
+            // this pin to be driven when unused.
+            disconnect_constant_port(ci, ctx->id("CLKIN2"));
+
             // Fixup routing
             if (str_or_default(ci->params, ctx->id("COMPENSATION"), "INTERNAL") == "INTERNAL") {
+                // COMPENSATION=INTERNAL uses the MMCM's internal feedback loop;
+                // CLKFBIN does not need a physical route. Leaving the port
+                // disconnected (instead of tying to VCC and routing it) avoids a
+                // prjxray segbit collision with CLKIN2 in CMT_TOP tiles.
                 disconnect_port(ctx, ci, ctx->id("CLKFBIN"));
-                connect_port(ctx, ctx->nets[ctx->id("$PACKER_VCC_NET")].get(), ci, ctx->id("CLKFBIN"));
             }
         }
     }
@@ -142,6 +154,8 @@ void XC7Packer::pack_gbs()
         if (ci->type == id_BUFG_BUFG)
             try_preplace(ci, id_I);
         if (ci->type == id_BUFHCE_BUFHCE)
+            try_preplace(ci, id_I);
+        if (ci->type == ctx->id("BUFIO_BUFIO"))
             try_preplace(ci, id_I);
     }
 }
